@@ -54,7 +54,8 @@ class SACB_Net(nn.Module):
                  inshape=(160,192,160),
                  in_c = 1,
                  ch_scale = 4,
-                 num_k = 5, 
+                 num_k = 5,
+                 lp_ratio = 0.15,
                  scale = 1.,
                  mean_type='s'
                 ):
@@ -66,7 +67,12 @@ class SACB_Net(nn.Module):
         self.mt = mean_type
         if type(num_k) is not tuple:
             self.num_k = tuple_(num_k, length=4)
-        else: self.num_k = num_k
+        else:
+            self.num_k = num_k
+        if type(lp_ratio) is not tuple:
+            self.lp_ratio = tuple_(lp_ratio, length=4)
+        else:
+            self.lp_ratio = lp_ratio
         self.encoder = Encoder(in_c=in_c, c=c)
         act=("leakyrelu", {"negative_slope": 0.1}) 
      
@@ -76,10 +82,10 @@ class SACB_Net(nn.Module):
         self.conv1 = double_conv(2*c, 2*c, act=act)
         self.cross_sim = cross_Sim()
         
-        self.sacb_proj2 = SACB(4*c,   4*c, in_proj_n=proj_n, ks=3, mean_type=self.mt, num_k=self.num_k[0], act=act, residual=True)
-        self.sacb_proj3 = SACB(8*c,   8*c, in_proj_n=proj_n, ks=3, mean_type=self.mt, num_k=self.num_k[1], act=act, residual=True)
-        self.sacb_proj4 = SACB(16*c, 16*c, in_proj_n=proj_n, ks=3, mean_type=self.mt, num_k=self.num_k[2], act=act, residual=True)
-        self.sacb_proj5 = SACB(16*c, 16*c, in_proj_n=proj_n, ks=3, mean_type=self.mt, num_k=self.num_k[3], act=act, residual=True)
+        self.sacb_proj2 = SACB(4*c,   4*c, in_proj_n=proj_n, ks=3, mean_type=self.mt, num_k=self.num_k[0], act=act, residual=True, lp_ratio=self.lp_ratio[0])
+        self.sacb_proj3 = SACB(8*c,   8*c, in_proj_n=proj_n, ks=3, mean_type=self.mt, num_k=self.num_k[1], act=act, residual=True, lp_ratio=self.lp_ratio[1])
+        self.sacb_proj4 = SACB(16*c, 16*c, in_proj_n=proj_n, ks=3, mean_type=self.mt, num_k=self.num_k[2], act=act, residual=True, lp_ratio=self.lp_ratio[2])
+        self.sacb_proj5 = SACB(16*c, 16*c, in_proj_n=proj_n, ks=3, mean_type=self.mt, num_k=self.num_k[3], act=act, residual=True, lp_ratio=self.lp_ratio[3])
         self.conv1_out = double_conv(2*2*c, 2*c, act=act, append_fn=conv(2*c,3, 3,1,1, act=None))
         self.transformer = nn.ModuleList()
         for i in range(4):
@@ -92,6 +98,20 @@ class SACB_Net(nn.Module):
         self.sacb_proj4.set_num_k(k[1])
         self.sacb_proj3.set_num_k(k[2])
         self.sacb_proj2.set_num_k(k[3])
+
+    def set_lp_ratio(self, lp_ratio):
+        if type(lp_ratio) is not tuple:
+            lp_ratio = tuple_(lp_ratio, length=4)
+        self.sacb_proj2.set_lp_ratio(lp_ratio[0])
+        self.sacb_proj3.set_lp_ratio(lp_ratio[1])
+        self.sacb_proj4.set_lp_ratio(lp_ratio[2])
+        self.sacb_proj5.set_lp_ratio(lp_ratio[3])
+
+    def set_force_cpu_fft(self, force_cpu_fft):
+        self.sacb_proj2.set_force_cpu_fft(force_cpu_fft)
+        self.sacb_proj3.set_force_cpu_fft(force_cpu_fft)
+        self.sacb_proj4.set_force_cpu_fft(force_cpu_fft)
+        self.sacb_proj5.set_force_cpu_fft(force_cpu_fft)
         
     def forward(self, x, y, softsign_last=False):
         # encode stage
