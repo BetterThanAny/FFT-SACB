@@ -102,22 +102,28 @@ def dice_val(y_pred, y_true, num_clus):
     dsc = (2.*intersection) / (union + 1e-5)
     return torch.mean(torch.mean(dsc, dim=1))
 
+
+def _dice_voi_batch(pred, true, voi_lbls):
+    # pred/true: [B, D, H, W]
+    bs = pred.shape[0]
+    dscs = np.zeros((bs, len(voi_lbls)), dtype=np.float64)
+    for b in range(bs):
+        pred_b = pred[b]
+        true_b = true[b]
+        for idx, lbl in enumerate(voi_lbls):
+            pred_i = pred_b == lbl
+            true_i = true_b == lbl
+            intersection = np.sum(pred_i * true_i)
+            union = np.sum(pred_i) + np.sum(true_i)
+            dscs[b, idx] = (2. * intersection) / (union + 1e-5)
+    return np.mean(dscs)
+
+
 def dice_abdo(y_pred, y_true):
     VOI_lbls = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
-    pred = y_pred.detach().cpu().numpy()[0, 0, ...]
-    true = y_true.detach().cpu().numpy()[0, 0, ...]
-    DSCs = np.zeros((len(VOI_lbls), 1))
-    idx = 0
-    for i in VOI_lbls:
-        pred_i = pred == i
-        true_i = true == i
-        intersection = pred_i * true_i
-        intersection = np.sum(intersection)
-        union = np.sum(pred_i) + np.sum(true_i)
-        dsc = (2.*intersection) / (union + 1e-5)
-        DSCs[idx] =dsc
-        idx += 1
-    return np.mean(DSCs)
+    pred = y_pred.detach().cpu().numpy()[:, 0, ...]
+    true = y_true.detach().cpu().numpy()[:, 0, ...]
+    return _dice_voi_batch(pred, true, VOI_lbls)
 
 def dice_LPBA(y_pred, y_true):
     VOI_lbls = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
@@ -125,38 +131,15 @@ def dice_LPBA(y_pred, y_true):
                 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
                 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
                 48, 49, 50, 51, 52, 53, 54]
-    pred = y_pred.detach().cpu().numpy()[0, 0, ...]
-    true = y_true.detach().cpu().numpy()[0, 0, ...]
-    DSCs = np.zeros((len(VOI_lbls), 1))
-    idx = 0
-    for i in VOI_lbls:
-        pred_i = pred == i
-        true_i = true == i
-        intersection = pred_i * true_i
-        intersection = np.sum(intersection)
-        union = np.sum(pred_i) + np.sum(true_i)
-        dsc = (2.*intersection) / (union + 1e-5)
-        DSCs[idx] =dsc
-        idx += 1
-    return np.mean(DSCs)
+    pred = y_pred.detach().cpu().numpy()[:, 0, ...]
+    true = y_true.detach().cpu().numpy()[:, 0, ...]
+    return _dice_voi_batch(pred, true, VOI_lbls)
 
 def dice_val_VOI(y_pred, y_true):
     VOI_lbls = [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 21, 22, 23, 25, 26, 27, 28, 29, 30, 31, 32, 34, 36]
-         
-    pred = y_pred.detach().cpu().numpy()[0, 0, ...]
-    true = y_true.detach().cpu().numpy()[0, 0, ...]
-    DSCs = np.zeros((len(VOI_lbls), 1))
-    idx = 0
-    for i in VOI_lbls:
-        pred_i = pred == i
-        true_i = true == i
-        intersection = pred_i * true_i
-        intersection = np.sum(intersection)
-        union = np.sum(pred_i) + np.sum(true_i)
-        dsc = (2.*intersection) / (union + 1e-5)
-        DSCs[idx] =dsc
-        idx += 1
-    return np.mean(DSCs)
+    pred = y_pred.detach().cpu().numpy()[:, 0, ...]
+    true = y_true.detach().cpu().numpy()[:, 0, ...]
+    return _dice_voi_batch(pred, true, VOI_lbls)
 
 def jacobian_determinant_vxm(disp):
     """

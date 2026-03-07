@@ -3,7 +3,6 @@ import torch, sys
 from torch.utils.data import Dataset
 import pickle
 import numpy as np
-import itertools
     
 def pkload(fname):
     with open(fname, 'rb') as f:
@@ -14,6 +13,7 @@ class IXIBrainDataset(Dataset):
         self.paths = data_path
         self.atlas_path = atlas_path
         self.transforms = transforms
+        self.atlas_img, self.atlas_seg = pkload(self.atlas_path)
 
     def one_hot(self, img, C):
         out = np.zeros((C, img.shape[1], img.shape[2], img.shape[3]))
@@ -23,7 +23,7 @@ class IXIBrainDataset(Dataset):
 
     def __getitem__(self, index):
         path = self.paths[index]
-        x, x_seg = pkload(self.atlas_path)
+        x = self.atlas_img.copy()
         y, y_seg = pkload(path)
 
         x, y = x[None, ...], y[None, ...]
@@ -45,6 +45,7 @@ class IXIBrainInferDataset(Dataset):
         self.atlas_path = atlas_path
         self.paths = data_path
         self.transforms = transforms
+        self.atlas_img, self.atlas_seg = pkload(self.atlas_path)
 
     def one_hot(self, img, C):
         out = np.zeros((C, img.shape[1], img.shape[2], img.shape[3]))
@@ -54,7 +55,8 @@ class IXIBrainInferDataset(Dataset):
 
     def __getitem__(self, index):
         path = self.paths[index]
-        x, x_seg = pkload(self.atlas_path)
+        x = self.atlas_img.copy()
+        x_seg = self.atlas_seg.copy()
         y, y_seg = pkload(path)
         x, y = x[None, ...], y[None, ...]
         x_seg, y_seg= x_seg[None, ...], y_seg[None, ...]
@@ -104,7 +106,20 @@ class LPBABrainDatasetS2S(Dataset):
     def __init__(self, data_path, transforms):
         self.paths = data_path
         self.transforms = transforms
-        self.zip_pairs = list(itertools.permutations(self.paths, 2))
+        self.num_paths = len(self.paths)
+
+    def _pair_from_index(self, index):
+        n = self.num_paths
+        if n < 2:
+            raise IndexError('Need at least 2 samples to form source-target pairs.')
+        max_index = n * (n - 1)
+        if index < 0 or index >= max_index:
+            raise IndexError(f'Pair index out of range: {index}')
+        src_idx = index // (n - 1)
+        tgt_idx = index % (n - 1)
+        if tgt_idx >= src_idx:
+            tgt_idx += 1
+        return self.paths[src_idx], self.paths[tgt_idx]
     def one_hot(self, img, C):
         out = np.zeros((C, img.shape[1], img.shape[2], img.shape[3]))
         for i in range(C):
@@ -115,8 +130,7 @@ class LPBABrainDatasetS2S(Dataset):
         # x_index = index // (len(self.paths) - 1)
         # s = index % (len(self.paths) - 1)
         # y_index = s + 1 if s >= x_index else s
-        path_x = self.zip_pairs[index][0]
-        path_y = self.zip_pairs[index][1]
+        path_x, path_y = self._pair_from_index(index)
         x, x_seg = pkload(path_x)
         y, y_seg = pkload(path_y)
 
@@ -131,14 +145,27 @@ class LPBABrainDatasetS2S(Dataset):
         return x, y
 
     def __len__(self):
-        return len(self.zip_pairs)
+        return self.num_paths * (self.num_paths - 1)
 
 
 class LPBABrainInferDatasetS2S(Dataset):
     def __init__(self, data_path, transforms):
         self.paths = data_path
         self.transforms = transforms
-        self.zip_pairs = list(itertools.permutations(self.paths, 2))
+        self.num_paths = len(self.paths)
+
+    def _pair_from_index(self, index):
+        n = self.num_paths
+        if n < 2:
+            raise IndexError('Need at least 2 samples to form source-target pairs.')
+        max_index = n * (n - 1)
+        if index < 0 or index >= max_index:
+            raise IndexError(f'Pair index out of range: {index}')
+        src_idx = index // (n - 1)
+        tgt_idx = index % (n - 1)
+        if tgt_idx >= src_idx:
+            tgt_idx += 1
+        return self.paths[src_idx], self.paths[tgt_idx]
     def one_hot(self, img, C):
         out = np.zeros((C, img.shape[1], img.shape[2], img.shape[3]))
         for i in range(C):
@@ -146,8 +173,7 @@ class LPBABrainInferDatasetS2S(Dataset):
         return out
 
     def __getitem__(self, index):
-        path_x = self.zip_pairs[index][0]
-        path_y = self.zip_pairs[index][1]
+        path_x, path_y = self._pair_from_index(index)
         # print(os.path.basename(path_x), os.path.basename(path_y))
         x, x_seg = pkload(path_x)
         y, y_seg = pkload(path_y)
@@ -163,4 +189,4 @@ class LPBABrainInferDatasetS2S(Dataset):
         return x, y, x_seg, y_seg
 
     def __len__(self):
-        return len(self.zip_pairs)
+        return self.num_paths * (self.num_paths - 1)

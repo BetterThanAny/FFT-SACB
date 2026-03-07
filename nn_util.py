@@ -70,8 +70,9 @@ class STN(nn.Module):
         spatial_dims = len(image.shape) - 2
         grid =  ddf + self.reference_grid(image.shape)
         if not self.norm:
-            for i in range(len(spatial_dims)):
-                grid[:, i, ...] = 2 * (grid[:, i, ...] / (spatial_dims[i] - 1) - 0.5)
+            spatial_shape = image.shape[2:]
+            for i in range(spatial_dims):
+                grid[:, i, ...] = 2 * (grid[:, i, ...] / (spatial_shape[i] - 1) - 0.5)
         grid = grid.movedim(1, -1)
         idx_order = list(range(spatial_dims - 1, -1, -1))
         grid = grid[..., idx_order]  # z, y, x -> x, y, z

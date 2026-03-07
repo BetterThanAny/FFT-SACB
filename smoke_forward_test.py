@@ -6,7 +6,9 @@ from model import SACB_Net
 
 def main():
     inshape = (32, 32, 32)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if not torch.cuda.is_available():
+        raise RuntimeError("smoke_forward_test requires CUDA.")
+    device = torch.device("cuda")
     force_cpu_fft = os.environ.get("SACB_FORCE_CPU_FFT", "0") == "1"
 
     model = SACB_Net(inshape=inshape, lp_ratio=0.15).to(device)

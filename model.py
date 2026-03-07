@@ -54,7 +54,7 @@ class SACB_Net(nn.Module):
                  inshape=(160,192,160),
                  in_c = 1,
                  ch_scale = 4,
-                 num_k = 5,
+                 num_k = 2,
                  lp_ratio = 0.15,
                  scale = 1.,
                  mean_type='s'
@@ -94,10 +94,12 @@ class SACB_Net(nn.Module):
     def set_k(self, k):
         if type(k) is not tuple:
             k = tuple_(k, length=4)
-        self.sacb_proj5.set_num_k(k[0])
-        self.sacb_proj4.set_num_k(k[1])
-        self.sacb_proj3.set_num_k(k[2])
-        self.sacb_proj2.set_num_k(k[3])
+        if any(int(v) != 2 for v in k):
+            raise ValueError(f'FFT SACB only supports num_k=2 per scale, got {k}')
+        self.sacb_proj2.set_num_k(k[0])
+        self.sacb_proj3.set_num_k(k[1])
+        self.sacb_proj4.set_num_k(k[2])
+        self.sacb_proj5.set_num_k(k[3])
 
     def set_lp_ratio(self, lp_ratio):
         if type(lp_ratio) is not tuple:
