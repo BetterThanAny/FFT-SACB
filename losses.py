@@ -293,8 +293,9 @@ class NCC_vxm(torch.nn.Module):
         # set window size
         win = [9] * ndims if self.win is None else self.win
 
-        # compute filters
-        sum_filt = torch.ones([5, 1, *win]).to("cuda")
+        # compute filters on the same device/dtype as inputs and support arbitrary channels
+        channels = Ii.shape[1]
+        sum_filt = torch.ones([5 * channels, 1, *win], device=Ii.device, dtype=Ii.dtype)
 
         pad_no = math.floor(win[0] / 2)
 
@@ -321,9 +322,9 @@ class NCC_vxm(torch.nn.Module):
         # I2_sum = conv_fn(I2, sum_filt, stride=stride, padding=padding)
         # J2_sum = conv_fn(J2, sum_filt, stride=stride, padding=padding)
         # IJ_sum = conv_fn(IJ, sum_filt, stride=stride, padding=padding)
-        all_five = torch.cat((Ii, Ji, I2, J2, IJ),dim=1)
-        all_five_conv = conv_fn(all_five, sum_filt, stride=stride, padding=padding, groups=5)
-        I_sum, J_sum, I2_sum, J2_sum, IJ_sum = torch.split(all_five_conv, 1, dim=1)
+        all_five = torch.cat((Ii, Ji, I2, J2, IJ), dim=1)
+        all_five_conv = conv_fn(all_five, sum_filt, stride=stride, padding=padding, groups=5 * channels)
+        I_sum, J_sum, I2_sum, J2_sum, IJ_sum = torch.split(all_five_conv, channels, dim=1)
         
         win_size = np.prod(win)
         u_I = I_sum / win_size
@@ -361,27 +362,38 @@ class MIND_loss(torch.nn.Module):
         kernel_size = radius * 2 + 1
 
         # define start and end locations for self-similarity pattern
-        six_neighbourhood = torch.Tensor([[0, 1, 1],
-                                          [1, 1, 0],
-                                          [1, 0, 1],
-                                          [1, 1, 2],
-                                          [2, 1, 1],
-                                          [1, 2, 1]]).long()
+        six_neighbourhood = torch.tensor(
+            [[0, 1, 1],
+             [1, 1, 0],
+             [1, 0, 1],
+             [1, 1, 2],
+             [2, 1, 1],
+             [1, 2, 1]],
+            device=img.device,
+            dtype=torch.long,
+        )
 
         # squared distances
-        dist = self.pdist_squared(six_neighbourhood.t().unsqueeze(0)).squeeze(0)
+        dist = self.pdist_squared(six_neighbourhood.float().t().unsqueeze(0)).squeeze(0)
 
         # define comparison mask
-        x, y = torch.meshgrid(torch.arange(6), torch.arange(6))
+        x, y = torch.meshgrid(
+            torch.arange(6, device=img.device),
+            torch.arange(6, device=img.device),
+            indexing='ij',
+        )
         mask = ((x > y).view(-1) & (dist == 2).view(-1))
 
         # build kernel
         idx_shift1 = six_neighbourhood.unsqueeze(1).repeat(1, 6, 1).view(-1, 3)[mask, :]
         idx_shift2 = six_neighbourhood.unsqueeze(0).repeat(6, 1, 1).view(-1, 3)[mask, :]
-        mshift1 = torch.zeros(12, 1, 3, 3, 3).cuda()
-        mshift1.view(-1)[torch.arange(12) * 27 + idx_shift1[:, 0] * 9 + idx_shift1[:, 1] * 3 + idx_shift1[:, 2]] = 1
-        mshift2 = torch.zeros(12, 1, 3, 3, 3).cuda()
-        mshift2.view(-1)[torch.arange(12) * 27 + idx_shift2[:, 0] * 9 + idx_shift2[:, 1] * 3 + idx_shift2[:, 2]] = 1
+        dev, dt = img.device, img.dtype
+        mshift1 = torch.zeros(12, 1, 3, 3, 3, device=dev, dtype=dt)
+        mshift1_idx = torch.arange(12, device=dev) * 27 + idx_shift1[:, 0] * 9 + idx_shift1[:, 1] * 3 + idx_shift1[:, 2]
+        mshift1.view(-1)[mshift1_idx] = 1
+        mshift2 = torch.zeros(12, 1, 3, 3, 3, device=dev, dtype=dt)
+        mshift2_idx = torch.arange(12, device=dev) * 27 + idx_shift2[:, 0] * 9 + idx_shift2[:, 1] * 3 + idx_shift2[:, 2]
+        mshift2.view(-1)[mshift2_idx] = 1
         rpad1 = nn.ReplicationPad3d(dilation)
         rpad2 = nn.ReplicationPad3d(radius)
 
@@ -398,7 +410,7 @@ class MIND_loss(torch.nn.Module):
         mind = torch.exp(-mind)
 
         # permute to have same ordering as C++ code
-        mind = mind[:, torch.Tensor([6, 8, 1, 11, 2, 10, 0, 7, 9, 4, 5, 3]).long(), :, :, :]
+        mind = mind[:, torch.tensor([6, 8, 1, 11, 2, 10, 0, 7, 9, 4, 5, 3], device=mind.device, dtype=torch.long), :, :, :]
 
         return mind
 
@@ -415,7 +427,7 @@ class MutualInformation(torch.nn.Module):
 
         """Create bin centers"""
         bin_centers = np.linspace(minval, maxval, num=num_bin)
-        vol_bin_centers = Variable(torch.linspace(minval, maxval, num_bin), requires_grad=False).cuda()
+        self.register_buffer('vol_bin_centers', torch.linspace(minval, maxval, num_bin))
         num_bins = len(bin_centers)
 
         """Sigma for Gaussian approx."""
@@ -426,7 +438,6 @@ class MutualInformation(torch.nn.Module):
         self.bin_centers = bin_centers
         self.max_clip = maxval
         self.num_bins = num_bins
-        self.vol_bin_centers = vol_bin_centers
 
     def mi(self, y_true, y_pred):
         y_pred = torch.clamp(y_pred, 0., self.max_clip)
@@ -440,8 +451,7 @@ class MutualInformation(torch.nn.Module):
         nb_voxels = y_pred.shape[1]  # total num of voxels
 
         """Reshape bin centers"""
-        o = [1, 1, np.prod(self.vol_bin_centers.shape)]
-        vbc = torch.reshape(self.vol_bin_centers, o).cuda()
+        vbc = self.vol_bin_centers.to(device=y_true.device, dtype=y_true.dtype).view(1, 1, -1)
 
         """compute image terms by approx. Gaussian dist."""
         I_a = torch.exp(- self.preterm * torch.square(y_true - vbc))
@@ -473,7 +483,7 @@ class localMutualInformation(torch.nn.Module):
 
         """Create bin centers"""
         bin_centers = np.linspace(minval, maxval, num=num_bin)
-        vol_bin_centers = Variable(torch.linspace(minval, maxval, num_bin), requires_grad=False).cuda()
+        self.register_buffer('vol_bin_centers', torch.linspace(minval, maxval, num_bin))
         num_bins = len(bin_centers)
 
         """Sigma for Gaussian approx."""
@@ -483,7 +493,6 @@ class localMutualInformation(torch.nn.Module):
         self.bin_centers = bin_centers
         self.max_clip = maxval
         self.num_bins = num_bins
-        self.vol_bin_centers = vol_bin_centers
         self.patch_size = patch_size
 
     def local_mi(self, y_true, y_pred):
@@ -491,8 +500,7 @@ class localMutualInformation(torch.nn.Module):
         y_true = torch.clamp(y_true, 0, self.max_clip)
 
         """Reshape bin centers"""
-        o = [1, 1, np.prod(self.vol_bin_centers.shape)]
-        vbc = torch.reshape(self.vol_bin_centers, o).cuda()
+        vbc = self.vol_bin_centers.to(device=y_true.device, dtype=y_true.dtype).view(1, 1, -1)
 
         """Making image paddings"""
         if len(list(y_pred.size())[2:]) == 3:

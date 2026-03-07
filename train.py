@@ -1,10 +1,9 @@
 
 import argparse
 import csv
-import glob
-import os
 import random
 import sys
+from pathlib import Path
 
 import losses
 import numpy as np
@@ -17,21 +16,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 
-DEFAULT_BASE_DIR = 'D:/'
-os.environ.setdefault("base_dir", DEFAULT_BASE_DIR)
-
-
-class Logger(object):
-    def __init__(self, save_dir):
-        self.terminal = sys.stdout
-        self.log = open(save_dir + "logfile.log", "a")
-
-    def write(self, message):
-        self.terminal.write(message)
-        self.log.write(message)
-
-    def flush(self):
-        pass
+DEFAULT_BASE_DIR = '/root/autodl-tmp'
 
 
 def parse_lp_ratio(value):
@@ -64,15 +49,19 @@ def build_parser():
     parser.add_argument('--weights', type=parse_weights, default=[1.0, 0.3],
                         help='Loss weights: image,regularization (e.g. 1,0.3).')
     parser.add_argument('--batch-size', type=int, default=1)
+    parser.add_argument('--val-batch-size', type=int, default=1,
+                        help='Validation batch size. Use 0 to follow --batch-size.')
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--max-epoch', type=int, default=300)
     parser.add_argument('--epoch-start', type=int, default=0)
     parser.add_argument('--cont-training', action='store_true')
     parser.add_argument('--resume-epoch', type=int, default=201,
                         help='Used only when --cont-training is enabled and --epoch-start is 0.')
+    parser.add_argument('--resume-path', type=str, default='',
+                        help='Optional checkpoint path for resuming training.')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--num-workers', type=int, default=8)
-    parser.add_argument('--base-dir', type=str, default=os.getenv('base_dir', DEFAULT_BASE_DIR))
+    parser.add_argument('--base-dir', type=str, default=DEFAULT_BASE_DIR)
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--save-tag', type=str, default='',
                         help='Optional experiment tag. If empty, generated from dataset and lp_ratio.')
@@ -98,8 +87,46 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 
+def resolve_resume_ckpt(exp_dir, resume_path=''):
+    if resume_path:
+        p = Path(resume_path).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(f'Resume checkpoint not found: {p}')
+        return p
+
+    ckpts = natsorted(Path(exp_dir).glob('*.pth.tar'))
+    if not ckpts:
+        raise FileNotFoundError(f'No checkpoint found in {exp_dir}')
+    return ckpts[-1]
+
+
+def validate_args(args):
+    if args.batch_size < 1:
+        raise ValueError(f'--batch-size must be >= 1, got {args.batch_size}')
+    if args.val_batch_size < 0:
+        raise ValueError(f'--val-batch-size must be >= 0, got {args.val_batch_size}')
+    if args.max_epoch <= 0:
+        raise ValueError(f'--max-epoch must be > 0, got {args.max_epoch}')
+    if args.epoch_start < 0 or args.epoch_start >= args.max_epoch:
+        raise ValueError(f'--epoch-start must be in [0, {args.max_epoch - 1}], got {args.epoch_start}')
+    if args.num_workers < 0:
+        raise ValueError(f'--num-workers must be >= 0, got {args.num_workers}')
+    if args.lr <= 0:
+        raise ValueError(f'--lr must be > 0, got {args.lr}')
+    if any(w < 0 for w in args.weights):
+        raise ValueError(f'--weights must be non-negative, got {args.weights}')
+
+    lp_values = args.lp_ratio if isinstance(args.lp_ratio, tuple) else (args.lp_ratio,)
+    if any(v <= 0 for v in lp_values):
+        raise ValueError(f'--lp-ratio values must be > 0, got {args.lp_ratio}')
+
+    base_dir = Path(args.base_dir).expanduser()
+    if not base_dir.exists() or not base_dir.is_dir():
+        raise FileNotFoundError(f'--base-dir does not exist or is not a directory: {base_dir}')
+
+
 def main(args):
-    os.environ['base_dir'] = args.base_dir
+    base_dir = Path(args.base_dir).expanduser()
 
     g = torch.Generator()
     g.manual_seed(args.seed)
@@ -110,21 +137,21 @@ def main(args):
     bs = args.batch_size
     weights = args.weights
 
-    save_dir = 'sacb_ncc_{}_reg_{}_{}/'.format(weights[0], weights[1], tag)
+    save_dir_name = f'sacb_ncc_{weights[0]}_reg_{weights[1]}_{tag}'
+    exp_dir = Path('experiments') / save_dir_name
+    log_dir = Path('logs') / save_dir_name
+    csv_path = Path('csv') / f'sacb_ncc_{weights[0]}_reg_{weights[1]}_{tag}.csv'
 
-    if not os.path.exists('experiments/' + save_dir):
-        os.makedirs('experiments/' + save_dir)
-    if not os.path.exists('logs/' + save_dir):
-        os.makedirs('logs/' + save_dir)
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
 
-    os.makedirs('./csv', exist_ok=True)
-    csv_name = './csv/sacb_ncc_{}_reg_{}_{}.csv'.format(weights[0], weights[1], tag)
-
-    f = open(csv_name, 'w')
-    with f:
-        fnames = ['Index', 'Dice']
-        csvwriter = csv.DictWriter(f, fieldnames=fnames)
-        csvwriter.writeheader()
+    csv_exists = csv_path.exists()
+    csv_mode = 'a' if args.cont_training and csv_exists else 'w'
+    with open(csv_path, csv_mode, newline='') as f:
+        csvwriter = csv.writer(f)
+        if csv_mode == 'w':
+            csvwriter.writerow(['Index', 'Dice'])
 
     lr = args.lr
     epoch_start = args.epoch_start
@@ -133,43 +160,58 @@ def main(args):
 
     if cont_training and epoch_start == 0:
         epoch_start = args.resume_epoch
+    if epoch_start < 0 or epoch_start >= max_epoch:
+        raise ValueError(f'Effective epoch_start must be in [0, {max_epoch - 1}], got {epoch_start}')
 
     if args.dataset == 'ixi':
-        atlas_dir = os.path.join(os.getenv('base_dir'), 'IXI_data/atlas.pkl')
-        train_dir = os.path.join(os.getenv('base_dir'), 'IXI_data/Train/')
-        val_dir = os.path.join(os.getenv('base_dir'), 'IXI_data/Val/')
+        atlas_dir = base_dir / 'IXI_data' / 'atlas.pkl'
+        train_dir = base_dir / 'IXI_data' / 'Train'
+        val_dir = base_dir / 'IXI_data' / 'Val'
+        train_files = sorted(train_dir.glob('*.pkl'))
+        val_files = sorted(val_dir.glob('*.pkl'))
         train_composed = transforms.Compose([trans.NumpyType((np.float32, np.float32))])
         val_composed = transforms.Compose([
             trans.Seg_norm(),
             trans.NumpyType((np.float32, np.int16))
         ])
-        train_set = datasets.IXIBrainDataset(glob.glob(train_dir + '*.pkl'), atlas_dir, transforms=train_composed)
-        val_set = datasets.IXIBrainInferDataset(glob.glob(val_dir + '*.pkl'), atlas_dir, transforms=val_composed)
+        if not atlas_dir.is_file():
+            raise FileNotFoundError(f'Atlas file not found: {atlas_dir}')
+        train_set = datasets.IXIBrainDataset([str(p) for p in train_files], str(atlas_dir), transforms=train_composed)
+        val_set = datasets.IXIBrainInferDataset([str(p) for p in val_files], str(atlas_dir), transforms=val_composed)
         dice_score = utils.dice_val_VOI
         img_size = (160, 192, 224)
 
     if args.dataset == 'lpba':
-        train_dir = os.path.join(os.getenv('base_dir'), 'LPBA_data_2/Train/')
-        val_dir = os.path.join(os.getenv('base_dir'), 'LPBA_data_2/Val/')
+        train_dir = base_dir / 'LPBA_data_2' / 'Train'
+        val_dir = base_dir / 'LPBA_data_2' / 'Val'
+        train_files = sorted(train_dir.glob('*.pkl'))
+        val_files = sorted(val_dir.glob('*.pkl'))
         train_composed = transforms.Compose([trans.NumpyType((np.float32, np.float32))])
         val_composed = transforms.Compose([
             trans.Seg_norm2(),
             trans.NumpyType((np.float32, np.int16))
         ])
-        train_set = datasets.LPBABrainDatasetS2S(sorted(glob.glob(train_dir + '*.pkl')), transforms=train_composed)
-        val_set = datasets.LPBABrainInferDatasetS2S(sorted(glob.glob(val_dir + '*.pkl')), transforms=val_composed)
+        train_set = datasets.LPBABrainDatasetS2S([str(p) for p in train_files], transforms=train_composed)
+        val_set = datasets.LPBABrainInferDatasetS2S([str(p) for p in val_files], transforms=val_composed)
         dice_score = utils.dice_LPBA
         img_size = (160, 192, 160)
 
     if args.dataset == 'abd':
-        train_dir = os.path.join(os.getenv('base_dir'), 'AbdomenCTCT/Train/')
-        val_dir = os.path.join(os.getenv('base_dir'), 'AbdomenCTCT/Val/')
+        train_dir = base_dir / 'AbdomenCTCT' / 'Train'
+        val_dir = base_dir / 'AbdomenCTCT' / 'Val'
+        train_files = sorted(train_dir.glob('*.pkl'))
+        val_files = sorted(val_dir.glob('*.pkl'))
         train_composed = transforms.Compose([trans.NumpyType((np.float32, np.float32))])
         val_composed = transforms.Compose([trans.NumpyType((np.float32, np.int16))])
-        train_set = datasets.LPBABrainDatasetS2S(sorted(glob.glob(train_dir + '*.pkl')), transforms=train_composed)
-        val_set = datasets.LPBABrainInferDatasetS2S(sorted(glob.glob(val_dir + '*.pkl')), transforms=val_composed)
+        train_set = datasets.LPBABrainDatasetS2S([str(p) for p in train_files], transforms=train_composed)
+        val_set = datasets.LPBABrainInferDatasetS2S([str(p) for p in val_files], transforms=val_composed)
         dice_score = utils.dice_abdo
         img_size = (192, 160, 224)
+
+    if len(train_set) == 0:
+        raise ValueError(f'No training samples found for dataset={args.dataset} under {train_dir}')
+    if len(val_set) == 0:
+        raise ValueError(f'No validation samples found for dataset={args.dataset} under {val_dir}')
 
     train_loader = DataLoader(
         dataset=train_set,
@@ -179,9 +221,14 @@ def main(args):
         worker_init_fn=seed_worker,
         generator=g,
     )
+    val_bs = bs if args.val_batch_size == 0 else args.val_batch_size
+    if args.val_batch_size == 0:
+        print(f'[INFO] Validation batch_size follows train batch_size={bs}.')
+    else:
+        print(f'[INFO] Validation batch_size={val_bs}.')
     val_loader = DataLoader(
         val_set,
-        batch_size=bs,
+        batch_size=val_bs,
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,
@@ -194,11 +241,14 @@ def main(args):
     reg_model = utils.SpatialTransformer(size=img_size, mode='nearest').cuda()
 
     if cont_training:
-        model_dir = 'experiments/' + save_dir
+        model_dir = exp_dir
         updated_lr = round(lr * np.power(1 - epoch_start / max_epoch, 0.9), 8)
-        best_model = torch.load(model_dir + natsorted(os.listdir(model_dir))[-1])['state_dict']
-        print('Model: {} loaded!'.format(natsorted(os.listdir(model_dir))[-1]))
-        model.load_state_dict(best_model)
+        ckpt_path = resolve_resume_ckpt(model_dir, args.resume_path)
+        ckpt = torch.load(str(ckpt_path), map_location='cpu')
+        if 'state_dict' not in ckpt:
+            raise KeyError(f"Checkpoint missing 'state_dict': {ckpt_path}")
+        model.load_state_dict(ckpt['state_dict'])
+        print('Model: {} loaded!'.format(ckpt_path.name))
     else:
         updated_lr = lr
 
@@ -206,7 +256,7 @@ def main(args):
     criterions = [criterion]
     criterions += [losses.Grad3d(penalty='l2')]
 
-    writer = SummaryWriter(log_dir='logs/' + save_dir)
+    writer = SummaryWriter(log_dir=str(log_dir))
 
     model_parameters = filter(lambda p: p.requires_grad, model.parameters())
     params = sum([np.prod(p.size()) for p in model_parameters])
@@ -216,12 +266,12 @@ def main(args):
 
     for epoch in range(epoch_start, max_epoch):
         print('Training Starts')
+        adjust_learning_rate(optimizer, epoch, max_epoch, lr)
         loss_all = utils.AverageMeter()
         idx = 0
         for data in train_loader:
             idx += 1
             model.train()
-            adjust_learning_rate(optimizer, epoch, max_epoch, lr)
             data = [t.cuda() for t in data]
             x = data[0]
             y = data[1]
@@ -249,9 +299,10 @@ def main(args):
         print('Epoch {} loss {:.4f}'.format(epoch, loss_all.avg))
 
         eval_dsc = utils.AverageMeter()
+        model.eval()
+        reg_model.eval()
         with torch.no_grad():
             for data in val_loader:
-                model.eval()
                 data = [t.cuda() for t in data]
                 x = data[0]
                 y = data[1]
@@ -264,7 +315,7 @@ def main(args):
                 dsc = dice_score(def_out.long(), y_seg.long())
                 eval_dsc.update(dsc.item(), x.size(0))
 
-        with open(csv_name, 'a') as f:
+        with open(csv_path, 'a', newline='') as f:
             csvwriter = csv.writer(f)
             csvwriter.writerow([epoch, eval_dsc.avg])
 
@@ -272,7 +323,7 @@ def main(args):
             {
                 'state_dict': model.state_dict(),
             },
-            save_dir='experiments/' + save_dir,
+            save_dir=exp_dir,
             filename='dsc{:.4f}_e{}.pth.tar'.format(eval_dsc.avg, epoch),
         )
 
@@ -286,27 +337,35 @@ def adjust_learning_rate(optimizer, epoch, MAX_EPOCHES, INIT_LR, power=0.9):
 
 
 def save_checkpoint(state, save_dir='models', filename='checkpoint.pth.tar', max_model_num=20):
-    torch.save(state, save_dir + filename)
-    model_lists = natsorted(glob.glob(save_dir + '*'))
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = save_dir / filename
+    torch.save(state, str(checkpoint_path))
+    model_lists = sorted(save_dir.glob('*.pth.tar'), key=lambda p: p.stat().st_mtime)
     while len(model_lists) > max_model_num:
-        os.remove(model_lists[0])
-        model_lists = natsorted(glob.glob(save_dir + '*'))
+        model_lists[0].unlink()
+        model_lists = sorted(save_dir.glob('*.pth.tar'), key=lambda p: p.stat().st_mtime)
 
 
 if __name__ == '__main__':
     parser = build_parser()
     args = parser.parse_args()
+    validate_args(args)
 
-    GPU_iden = args.gpu
     GPU_num = torch.cuda.device_count()
+    if not torch.cuda.is_available() or GPU_num == 0:
+        raise RuntimeError('CUDA is not available. This training script currently requires GPU.')
+
+    if args.gpu < 0 or args.gpu >= GPU_num:
+        raise ValueError(f'--gpu must be in [0, {GPU_num - 1}], got {args.gpu}')
+
     print('Number of GPU: ' + str(GPU_num))
     for GPU_idx in range(GPU_num):
         GPU_name = torch.cuda.get_device_name(GPU_idx)
         print('     GPU #' + str(GPU_idx) + ': ' + GPU_name)
 
-    torch.cuda.set_device(GPU_iden)
-    GPU_avai = torch.cuda.is_available()
-    print('Currently using: ' + torch.cuda.get_device_name(GPU_iden))
-    print('If the GPU is available? ' + str(GPU_avai))
+    torch.cuda.set_device(args.gpu)
+    current_gpu = torch.cuda.current_device()
+    print(f'Currently using GPU #{current_gpu}: ' + torch.cuda.get_device_name(current_gpu))
 
     main(args)

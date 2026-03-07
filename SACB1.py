@@ -136,7 +136,7 @@ class SACB(nn.Module):
         padding=1,
         dilation=1,
         groups=1,
-        num_k=4,
+        num_k=2,
         act='prelu',
         residual=True,
         mean_type='s',
@@ -153,6 +153,8 @@ class SACB(nn.Module):
         self.stride = stride
         self.padding = tuple(x for x in reversed(_triple(padding)) for _ in range(2))
         self.dilation = _triple(dilation)
+        if int(num_k) != 2:
+            raise ValueError(f'FFT SACB only supports num_k=2, got {num_k}')
         self.num_k = 2
         self.res = residual
         self.out_ch = out_ch
@@ -200,7 +202,10 @@ class SACB(nn.Module):
         nn.init.kaiming_uniform_(self.w, a=math.sqrt(5))
 
     def set_num_k(self, k):
-        # Keep compatibility with existing callers; FFT version is fixed to 2 groups.
+        # FFT partition in this implementation is binary (low/high), so only k=2 is valid.
+        k_val = int(k)
+        if k_val != 2:
+            raise ValueError(f'FFT SACB only supports num_k=2, got {k}')
         self.num_k = 2
 
     def set_lp_ratio(self, lp_ratio):
