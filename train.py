@@ -322,6 +322,7 @@ def main(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=updated_lr)
 
     # ===== 训练主循环 =====
+    best_dsc = 0.0
     for epoch in range(epoch_start, max_epoch):
         print('Training Starts')
         adjust_learning_rate(optimizer, epoch, max_epoch, lr)  # 按 poly 策略衰减学习率
@@ -391,6 +392,12 @@ def main(args):
             filename='dsc{:.4f}_e{}.pth.tar'.format(eval_dsc.avg, epoch),
         )
 
+        # 保存最佳模型
+        if eval_dsc.avg > best_dsc:
+            best_dsc = eval_dsc.avg
+            torch.save({'state_dict': model.state_dict()}, str(Path(exp_dir) / 'best_model.pth.tar'))
+            print(f'Best model saved at epoch {epoch} with DSC={best_dsc:.4f}')
+
         writer.add_scalar('DSC/validate', eval_dsc.avg, epoch)
     writer.close()
 
@@ -407,7 +414,10 @@ def save_checkpoint(state, save_dir='models', filename='checkpoint.pth.tar', max
     save_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = save_dir / filename
     torch.save(state, str(checkpoint_path))
-    model_lists = sorted(save_dir.glob('*.pth.tar'), key=lambda p: p.stat().st_mtime)
+    model_lists = sorted(
+        [p for p in save_dir.glob('*.pth.tar') if p.name != 'best_model.pth.tar'],
+        key=lambda p: p.stat().st_mtime,
+    )
     while len(model_lists) > max_model_num:
         model_lists.pop(0).unlink()
 

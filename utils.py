@@ -237,31 +237,6 @@ def jacobian_determinant_vxm(disp):
 
         return dfdx[..., 0] * dfdy[..., 1] - dfdy[..., 0] * dfdx[..., 1]
 
-import re
-def process_label():
-    """解析 FreeSurfer 的标签信息文件，构建标签索引到名称的映射字典。"""
-    #process labeling information for FreeSurfer
-    seg_table = [0, 2, 3, 4, 5, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 24, 26,
-                          28, 30, 31, 41, 42, 43, 44, 46, 47, 49, 50, 51, 52, 53, 54, 58, 60, 62,
-                          63, 72, 77, 80, 85, 251, 252, 253, 254, 255]
-    file1 = open('label_info.txt', 'r')
-    Lines = file1.readlines()
-    dict = {}
-    seg_i = 0
-    seg_look_up = []
-    for seg_label in seg_table:
-        for line in Lines:
-            line = re.sub(' +', ' ',line).split(' ')
-            try:
-                int(line[0])
-            except:
-                continue
-            if int(line[0]) == seg_label:
-                seg_look_up.append([seg_i, int(line[0]), line[1]])
-                dict[seg_i] = line[1]
-        seg_i += 1
-    return dict
-
 def write2csv(line, name):
     """将一行文本追加写入 CSV 文件。"""
     with open(name+'.csv', 'a') as file:

@@ -12,8 +12,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from torch.distributions.normal import Normal
-from nn_util import get_act_layer, conv, unfoldNd
-from SACB1 import SACB, cross_Sim, tuple_
+from nn_util import get_act_layer, conv, unfoldNd, tuple_
+from SACB1 import SACB, cross_Sim
 import utils
 
 

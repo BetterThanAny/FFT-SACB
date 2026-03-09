@@ -9,7 +9,6 @@
 
 import torch
 import torch.nn.functional as F
-from torch.autograd import Variable
 import numpy as np
 from math import exp
 import math
@@ -26,7 +25,7 @@ def create_window(window_size, channel):
     """构建 2D 可分离高斯窗口，扩展到 `channel` 个分组。"""
     _1D_window = gaussian(window_size, 1.5).unsqueeze(1)
     _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
-    window = Variable(_2D_window.expand(channel, 1, window_size, window_size).contiguous())
+    window = _2D_window.expand(channel, 1, window_size, window_size).contiguous()
     return window
 
 
@@ -36,7 +35,7 @@ def create_window_3D(window_size, channel):
     _2D_window = _1D_window.mm(_1D_window.t())
     _3D_window = _1D_window.mm(_2D_window.reshape(1, -1)).reshape(window_size, window_size,
                                                                   window_size).float().unsqueeze(0).unsqueeze(0)
-    window = Variable(_3D_window.expand(channel, 1, window_size, window_size, window_size).contiguous())
+    window = _3D_window.expand(channel, 1, window_size, window_size, window_size).contiguous()
     return window
 
 
@@ -227,7 +226,6 @@ class Grad3DiTV(torch.nn.Module):
 
     def __init__(self):
         super(Grad3DiTV, self).__init__()
-        a = 1
 
     def forward(self, y_pred, y_true):
         dy = torch.abs(y_pred[:, :, 1:, 1:, 1:] - y_pred[:, :, :-1, 1:, 1:])
