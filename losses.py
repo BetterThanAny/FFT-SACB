@@ -1,3 +1,12 @@
+"""
+可变形图像配准的损失函数。
+
+包含以下两类损失：
+  1. 图像相似度度量：NCC（归一化互相关）、SSIM（结构相似性）、
+     MIND-SSC（模态无关邻域描述子）、MI（互信息）
+  2. 位移场正则化：梯度惩罚（L1/L2）、弯曲能量、各向同性全变分
+"""
+
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
@@ -6,12 +15,15 @@ from math import exp
 import math
 import torch.nn as nn
 
+
 def gaussian(window_size, sigma):
+    """生成 1D 高斯核（归一化），用于 SSIM 窗口构建。"""
     gauss = torch.Tensor([exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
     return gauss / gauss.sum()
 
 
 def create_window(window_size, channel):
+    """构建 2D 可分离高斯窗口，扩展到 `channel` 个分组。"""
     _1D_window = gaussian(window_size, 1.5).unsqueeze(1)
     _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
     window = Variable(_2D_window.expand(channel, 1, window_size, window_size).contiguous())
@@ -19,6 +31,7 @@ def create_window(window_size, channel):
 
 
 def create_window_3D(window_size, channel):
+    """构建 3D 可分离高斯窗口，扩展到 `channel` 个分组。"""
     _1D_window = gaussian(window_size, 1.5).unsqueeze(1)
     _2D_window = _1D_window.mm(_1D_window.t())
     _3D_window = _1D_window.mm(_2D_window.reshape(1, -1)).reshape(window_size, window_size,
@@ -28,6 +41,7 @@ def create_window_3D(window_size, channel):
 
 
 def _ssim(img1, img2, window, window_size, channel, size_average=True):
+    """计算 2D SSIM 图。"""
     mu1 = F.conv2d(img1, window, padding=window_size // 2, groups=channel)
     mu2 = F.conv2d(img2, window, padding=window_size // 2, groups=channel)
 
@@ -51,6 +65,7 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
 
 
 def _ssim_3D(img1, img2, window, window_size, channel, size_average=True):
+    """计算 3D SSIM 图。"""
     mu1 = F.conv3d(img1, window, padding=window_size // 2, groups=channel)
     mu2 = F.conv3d(img2, window, padding=window_size // 2, groups=channel)
 
@@ -75,6 +90,8 @@ def _ssim_3D(img1, img2, window, window_size, channel, size_average=True):
 
 
 class SSIM(torch.nn.Module):
+    """2D 结构相似性指数损失。返回 SSIM 值（越高越好）。"""
+
     def __init__(self, window_size=11, size_average=True):
         super(SSIM, self).__init__()
         self.window_size = window_size
@@ -101,6 +118,8 @@ class SSIM(torch.nn.Module):
 
 
 class SSIM3D(torch.nn.Module):
+    """3D 结构相似性损失。返回 (1 - SSIM)，用于最小化。"""
+
     def __init__(self, window_size=11, size_average=True):
         super(SSIM3D, self).__init__()
         self.window_size = window_size
@@ -127,6 +146,7 @@ class SSIM3D(torch.nn.Module):
 
 
 def ssim(img1, img2, window_size=11, size_average=True):
+    """函数式 2D SSIM（无状态，不缓存窗口）。"""
     (_, channel, _, _) = img1.size()
     window = create_window(window_size, channel)
 
@@ -138,6 +158,7 @@ def ssim(img1, img2, window_size=11, size_average=True):
 
 
 def ssim3D(img1, img2, window_size=11, size_average=True):
+    """函数式 3D SSIM（无状态，不缓存窗口）。"""
     (_, channel, _, _, _) = img1.size()
     window = create_window_3D(window_size, channel)
 
@@ -149,9 +170,7 @@ def ssim3D(img1, img2, window_size=11, size_average=True):
 
 
 class Grad(torch.nn.Module):
-    """
-    N-D gradient loss.
-    """
+    """2D 位移场梯度正则化损失。"""
 
     def __init__(self, penalty='l1', loss_mult=None):
         super(Grad, self).__init__()
@@ -173,9 +192,11 @@ class Grad(torch.nn.Module):
             grad *= self.loss_mult
         return grad
 
+
 class Grad3d(torch.nn.Module):
-    """
-    N-D gradient loss.
+    """3D 位移场梯度正则化损失。
+
+    惩罚位移场的空间导数以鼓励平滑形变。支持 L1 和 L2 惩罚。
     """
 
     def __init__(self, penalty='l1', loss_mult=None):
@@ -200,10 +221,9 @@ class Grad3d(torch.nn.Module):
             grad *= self.loss_mult
         return grad
 
+
 class Grad3DiTV(torch.nn.Module):
-    """
-    N-D gradient loss.
-    """
+    """3D 各向同性全变分：梯度幅值的 L2 范数取平均。"""
 
     def __init__(self):
         super(Grad3DiTV, self).__init__()
@@ -220,7 +240,16 @@ class Grad3DiTV(torch.nn.Module):
         grad = d / 3.0
         return grad
 
+
 class DisplacementRegularizer(torch.nn.Module):
+    """位移场正则化器，支持多种能量类型。
+
+    Args:
+        energy_type: 'bending'（二阶弯曲能量）、
+                     'gradient-l2'（一阶 L2 梯度）、
+                     'gradient-l1'（一阶 L1 梯度）。
+    """
+
     def __init__(self, energy_type):
         super().__init__()
         self.energy_type = energy_type
@@ -268,12 +297,12 @@ class DisplacementRegularizer(torch.nn.Module):
         return energy
 
 
-''' fast ncc
-https://github.com/xi-jia/FastLNCC
-'''
 class NCC_vxm(torch.nn.Module):
-    """
-    Local (over window) normalized cross correlation loss.
+    """局部（窗口化）归一化互相关损失。
+
+    使用 FastLNCC 优化：将五个计算项（I, J, I^2, J^2, I*J）拼接后
+    执行单次分组卷积，代替五次独立卷积，显著提升计算效率。
+    参考: https://github.com/xi-jia/FastLNCC
     """
 
     def __init__(self, win=None):
@@ -281,19 +310,19 @@ class NCC_vxm(torch.nn.Module):
         self.win = win
 
     def forward(self, y_true, y_pred):
+        """计算局部 NCC 损失（返回负值用于最小化）。"""
 
         Ii = y_true
         Ji = y_pred
 
-        # get dimension of volume
-        # assumes Ii, Ji are sized [batch_size, *vol_shape, nb_feats]
+        # 获取体数据的空间维度数
         ndims = len(list(Ii.size())) - 2
         assert ndims in [1, 2, 3], "volumes should be 1 to 3 dimensions. found: %d" % ndims
 
-        # set window size
+        # 设置滑动窗口大小（默认 9）
         win = [9] * ndims if self.win is None else self.win
 
-        # compute filters on the same device/dtype as inputs and support arbitrary channels
+        # 构建全 1 卷积核，支持任意通道数的分组卷积
         channels = Ii.shape[1]
         sum_filt = torch.ones([5 * channels, 1, *win], device=Ii.device, dtype=Ii.dtype)
 
@@ -309,45 +338,47 @@ class NCC_vxm(torch.nn.Module):
             stride = (1, 1, 1)
             padding = (pad_no, pad_no, pad_no)
 
-        # get convolution function
+        # 获取对应维度的卷积函数
         conv_fn = getattr(F, 'conv%dd' % ndims)
 
-        # compute CC squares
+        # 计算互相关所需的各项
         I2 = Ii * Ii
         J2 = Ji * Ji
         IJ = Ii * Ji
 
-        # I_sum = conv_fn(Ii, sum_filt, stride=stride, padding=padding)
-        # J_sum = conv_fn(Ji, sum_filt, stride=stride, padding=padding)
-        # I2_sum = conv_fn(I2, sum_filt, stride=stride, padding=padding)
-        # J2_sum = conv_fn(J2, sum_filt, stride=stride, padding=padding)
-        # IJ_sum = conv_fn(IJ, sum_filt, stride=stride, padding=padding)
+        # FastLNCC 优化：五项拼接后单次分组卷积
         all_five = torch.cat((Ii, Ji, I2, J2, IJ), dim=1)
         all_five_conv = conv_fn(all_five, sum_filt, stride=stride, padding=padding, groups=5 * channels)
         I_sum, J_sum, I2_sum, J2_sum, IJ_sum = torch.split(all_five_conv, channels, dim=1)
-        
+
+        # 计算局部均值
         win_size = np.prod(win)
         u_I = I_sum / win_size
         u_J = J_sum / win_size
 
+        # 计算互相关系数
         cross = IJ_sum - u_J * I_sum - u_I * J_sum + u_I * u_J * win_size
         I_var = I2_sum - 2 * u_I * I_sum + u_I * u_I * win_size
         J_var = J2_sum - 2 * u_J * J_sum + u_J * u_J * win_size
 
         cc = cross * cross / (I_var * J_var + 1e-5)
 
-        return -torch.mean(cc)
+        return -torch.mean(cc)  # 返回负值以便最小化
+
 
 class MIND_loss(torch.nn.Module):
+    """MIND-SSC（模态无关邻域描述子-自相似上下文）损失。
+
+    适用于多模态配准。通过比较两幅图像在局部邻域内的自相似模式来衡量相似度。
+    参考: Heinrich et al., MICCAI 2013.
     """
-        Local (over window) normalized cross correlation loss.
-        """
 
     def __init__(self, win=None):
         super(MIND_loss, self).__init__()
         self.win = win
 
     def pdist_squared(self, x):
+        """批量计算成对平方欧氏距离。"""
         xx = (x ** 2).sum(dim=1).unsqueeze(2)
         yy = xx.permute(0, 2, 1)
         dist = xx + yy - 2.0 * torch.bmm(x.permute(0, 2, 1), x)
@@ -356,12 +387,11 @@ class MIND_loss(torch.nn.Module):
         return dist
 
     def MINDSSC(self, img, radius=2, dilation=2):
-        # see http://mpheinrich.de/pub/miccai2013_943_mheinrich.pdf for details on the MIND-SSC descriptor
-
-        # kernel size
+        """为 3D 图像计算 MIND-SSC 描述子。"""
+        # 核大小
         kernel_size = radius * 2 + 1
 
-        # define start and end locations for self-similarity pattern
+        # 3x3x3 核内的 6 连通邻域偏移
         six_neighbourhood = torch.tensor(
             [[0, 1, 1],
              [1, 1, 0],
@@ -373,10 +403,10 @@ class MIND_loss(torch.nn.Module):
             dtype=torch.long,
         )
 
-        # squared distances
+        # 平方距离
         dist = self.pdist_squared(six_neighbourhood.float().t().unsqueeze(0)).squeeze(0)
 
-        # define comparison mask
+        # 定义比较掩码：距离为 2 的配对（边连接）
         x, y = torch.meshgrid(
             torch.arange(6, device=img.device),
             torch.arange(6, device=img.device),
@@ -384,7 +414,7 @@ class MIND_loss(torch.nn.Module):
         )
         mask = ((x > y).view(-1) & (dist == 2).view(-1))
 
-        # build kernel
+        # 构建移位核，用于计算偏移版本间的补丁 SSD
         idx_shift1 = six_neighbourhood.unsqueeze(1).repeat(1, 6, 1).view(-1, 3)[mask, :]
         idx_shift2 = six_neighbourhood.unsqueeze(0).repeat(6, 1, 1).view(-1, 3)[mask, :]
         dev, dt = img.device, img.dtype
@@ -397,19 +427,19 @@ class MIND_loss(torch.nn.Module):
         rpad1 = nn.ReplicationPad3d(dilation)
         rpad2 = nn.ReplicationPad3d(radius)
 
-        # compute patch-ssd
+        # 两个移位版本的补丁 SSD（平方差之和）
         ssd = F.avg_pool3d(rpad2(
             (F.conv3d(rpad1(img), mshift1, dilation=dilation) - F.conv3d(rpad1(img), mshift2, dilation=dilation)) ** 2),
                            kernel_size, stride=1)
 
-        # MIND equation
+        # MIND 公式：归一化 SSD 后取指数
         mind = ssd - torch.min(ssd, 1, keepdim=True)[0]
         mind_var = torch.mean(mind, 1, keepdim=True)
         mind_var = torch.clamp(mind_var, (mind_var.mean() * 0.001).item(), (mind_var.mean() * 1000).item())
         mind /= mind_var
         mind = torch.exp(-mind)
 
-        # permute to have same ordering as C++ code
+        # 重排序以与 C++ 代码保持一致
         mind = mind[:, torch.tensor([6, 8, 1, 11, 2, 10, 0, 7, 9, 4, 5, 3], device=mind.device, dtype=torch.long), :, :, :]
 
         return mind
@@ -417,9 +447,11 @@ class MIND_loss(torch.nn.Module):
     def forward(self, y_pred, y_true):
         return torch.mean((self.MINDSSC(y_pred) - self.MINDSSC(y_true)) ** 2)
 
+
 class MutualInformation(torch.nn.Module):
-    """
-    Mutual Information
+    """全局互信息损失，使用软直方图（Parzen/高斯）分箱。
+
+    返回负 MI 值用于最小化。
     """
 
     def __init__(self, sigma_ratio=1, minval=0., maxval=1., num_bin=32):
@@ -440,6 +472,7 @@ class MutualInformation(torch.nn.Module):
         self.num_bins = num_bins
 
     def mi(self, y_true, y_pred):
+        """计算互信息值。"""
         y_pred = torch.clamp(y_pred, 0., self.max_clip)
         y_true = torch.clamp(y_true, 0, self.max_clip)
 
@@ -448,19 +481,19 @@ class MutualInformation(torch.nn.Module):
         y_pred = y_pred.view(y_pred.shape[0], -1)
         y_pred = torch.unsqueeze(y_pred, 2)
 
-        nb_voxels = y_pred.shape[1]  # total num of voxels
+        nb_voxels = y_pred.shape[1]  # 体素总数
 
-        """Reshape bin centers"""
+        # 将分箱中心重塑为广播形状
         vbc = self.vol_bin_centers.to(device=y_true.device, dtype=y_true.dtype).view(1, 1, -1)
 
-        """compute image terms by approx. Gaussian dist."""
+        # 通过高斯核进行软直方图分箱
         I_a = torch.exp(- self.preterm * torch.square(y_true - vbc))
-        I_a = I_a / torch.sum(I_a, dim=-1, keepdim=True)
+        I_a = I_a / torch.sum(I_a, dim=-1, keepdim=True)  # 归一化
 
         I_b = torch.exp(- self.preterm * torch.square(y_pred - vbc))
         I_b = I_b / torch.sum(I_b, dim=-1, keepdim=True)
 
-        # compute probabilities
+        # 计算联合概率和边缘概率
         pab = torch.bmm(I_a.permute(0, 2, 1), I_b)
         pab = pab / nb_voxels
         pa = torch.mean(I_a, dim=1, keepdim=True)
@@ -468,14 +501,17 @@ class MutualInformation(torch.nn.Module):
 
         papb = torch.bmm(pa.permute(0, 2, 1), pb) + 1e-6
         mi = torch.sum(torch.sum(pab * torch.log(pab / papb + 1e-6), dim=1), dim=1)
-        return mi.mean()  # average across batch
+        return mi.mean()  # 批次平均
 
     def forward(self, y_true, y_pred):
         return -self.mi(y_true, y_pred)
 
+
 class localMutualInformation(torch.nn.Module):
-    """
-    Local Mutual Information for non-overlapping patches
+    """局部互信息损失（基于非重叠补丁）。
+
+    在每个补丁内独立计算 MI，实现空间局部化的相似性度量。
+    支持 2D 和 3D 输入。
     """
 
     def __init__(self, sigma_ratio=1, minval=0., maxval=1., num_bin=32, patch_size=5):
