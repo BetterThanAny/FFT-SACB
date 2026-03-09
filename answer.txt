@@ -148,120 +148,46 @@ SACB_Net/
 五、代码存在的问题
 ================================================================================
 
-【问题1】SACB2.py (旧版K-Means) 中的 meshgrid 调用缺少 indexing 参数
-  位置: SACB2.py:66
-  代码: grid = torch.stack(torch.meshgrid(vectors), -1)
-  问题: PyTorch 1.13+ 对 torch.meshgrid 不传 indexing 参数会产生 FutureWarning,
-        且默认行为 (indexing='ij') 未来可能变化。SACB1.py 中已修复 (加了
-        indexing='ij'), 但 SACB2.py 遗漏了。
-  影响: 运行时产生告警, 未来PyTorch版本可能行为变化导致结果错误。
+1. [严重] 问题15 — 无 best model 保存逻辑 train.py:386-412
 
-【问题2】SpatialTransformer 中 grid 在 forward 时被原地修改
-  位置: utils.py:63-68
-  代码:
-    new_locs = self.grid + flow
-    for i in range(len(shape)):
-        new_locs[:, i, ...] = 2 * (new_locs[:, i, ...] / (shape[i] - 1) - 0.5)
-  问题: self.grid 是 register_buffer 注册的张量, "self.grid + flow" 在某些情况
-        下(特别是当 flow 是零张量或 self.grid 的 view 时)可能返回一个共享底层
-        存储的张量。虽然当前实现下 "+" 操作会创建新张量, 不会直接修改 self.grid,
-        但这种依赖行为脆弱, 且不同 batch size 时 broadcasting 可能导致意外。
-        更安全的做法是显式 clone: new_locs = self.grid.clone() + flow。
+  确认。文件名虽包含 Dice 分数（dsc0.7523_e42.pth.tar），但 save_checkpoint 按修改时间删旧，最优模型可能被删除。
 
-【问题3】SpatialTransformer 构造函数中 device 硬编码为 'cuda'
-  位置: utils.py:42
-  代码: def __init__(self, size, mode='bilinear', device='cuda')
-  问题: 默认参数硬编码 device='cuda', 且在 __init__ 中直接将 grid 移到该设备。
-        这意味着:
-        1) 在无GPU环境无法实例化
-        2) grid 通过 register_buffer 注册后, .to(device) / .cuda() 调用会自动
-           移动 buffer, 但初始化时已固定设备, 与 PyTorch 的设备管理惯例不一致
-  建议: 不在 __init__ 指定设备, 让 register_buffer 自动跟随 module.to(device)。
+  2. [中等] 问题11 — KM_GPU 中 np.random.seed 污染全局状态 SACB2.py:75
 
-【问题4】（已删除：原分析有误。train.py 第215/233/249行已正确使用 if-elif-elif 结构）
+  确认。forward 中调用 np.random.seed(self.seed) 会影响整个进程的 numpy 随机状态。但 SACB2 是旧版，当前默认用
+  SACB1（FFT），所以实际影响仅在使用 K-Means 版本时。
 
-【问题5】losses.py 中使用已废弃的 torch.autograd.Variable
-  位置: losses.py:3, 17, 27
-  代码: from torch.autograd import Variable 和 window = Variable(...)
-  问题: Variable 自 PyTorch 0.4 起已废弃, 所有 Tensor 自动支持 autograd。
-        使用 Variable 包装没有实际作用, 增加了代码的混乱度。
+  3. [中等] 问题7 — cross_Sim.forward 修改实例状态 SACB1.py:135-137, SACB2.py:106-108
 
-【问题6】NCC_vxm 损失函数中 sum_filt 的通道数与输入的关系
-  位置: losses.py:298
-  代码: sum_filt = torch.ones([5 * channels, 1, *win], ...)
-  问题: 这是一个分组卷积的 filter, 5 * channels 对应 Ii/Ji/I2/J2/IJ 五个量各
-        channels 个通道。虽然当前 channels=1 时工作正常, 但如果将来输入多通道图
-        像, 这个实现可能产生非预期的结果, 且代码缺少对此的说明注释。
+  确认。但当前 model.py 中调用 cross_sim(M5, F5) 从不传 wins 参数，所以 if wins: 永远不会进入。是设计隐患而非实际 bug。
 
-【问题7】cross_Sim 中 forward 方法修改了实例状态
-  位置: SACB1.py:102-105 和 SACB2.py:59-62
-  代码:
-    def forward(self, Fx, Fy, wins=None):
-        if wins:
-            self.wins = wins
-            self.win_len = wins ** 3
-  问题: forward 中根据参数修改了 self.wins 和 self.win_len, 这是有副作用的设计。
-        在多线程推理或不同调用传不同 wins 时会导致状态污染。nn.Module 的 forward
-        方法应尽量避免修改实例状态。
+  4. [低] 问题1 — SACB2.py meshgrid 缺少 indexing 参数 SACB2.py:113
 
-【问题8】（已删除：原分析有误。当前 SACB2.py 中不存在硬编码的 .cuda() 调用）
+  确认。torch.meshgrid(vectors) 缺少 indexing='ij'，SACB1.py 同位置已修复。但 SACB2 是旧版非默认路径。
 
-【问题9】requirements.txt 中的 torch 版本过旧
-  位置: requirements.txt:12
-  内容: torch==1.13.1
-  问题:
-    1) PyTorch 1.13.1 已停止维护, 存在已知的安全漏洞和 bug
-    2) 代码中使用了 torch.fft 模块 (SACB1.py), 而 FFT 在新版 PyTorch 中有性能
-       和稳定性改进
-    3) MONAI 1.4.0 推荐 PyTorch >= 1.12, 但更新版 MONAI 已不再测试 1.13
-    4) README.md 提到 "上面的配置其实有点问题, 后续再改", 说明作者也意识到了
+  5. [低] 问题5 — Variable 已废弃 losses.py:12,29,39
 
-【问题10】重复定义 tuple_ 辅助函数
-  位置: SACB1.py:22, SACB2.py:27
-  代码: def tuple_(x, length=1): return x if isinstance(x, tuple) else ((x,)*length)
-  问题: 同一个简单工具函数在两个文件中各自定义了一遍 (model.py 通过
-        from SACB1 import tuple_ 导入, 并非重复定义), 违反 DRY 原则。应提取到
-        公共工具模块 (如 nn_util.py) 中。
+  确认。Variable 自 PyTorch 0.4 起是空操作包装器，删掉即可。
 
-【问题11】SACB2.py 中 KM_GPU 使用 np.random.seed 控制随机性
-  位置: SACB2.py:39
-  代码: if self.fix_rng: np.random.seed(self.seed)
-  问题: 在 forward 中全局设置 np.random.seed 会影响整个进程的随机状态, 可能干扰
-        数据增强、DataLoader worker 等其他依赖 numpy 随机数的组件。应使用
-        numpy.random.Generator 局部控制。
+  7. [低] 问题16 — Grad3DiTV.__init__ 中 a = 1 无意义 losses.py:230
 
-【问题12】dataset/__init__.py 内容无意义
-  位置: dataset/__init__.py:1
-  内容: import numpy as np
-  问题: __init__.py 中只导入了 numpy 但未使用, 也没有定义任何公共接口, 这行
-        import 是多余的。
+  确认。调试遗留，完全无用。
 
-【问题13】nn_util.py 中存在未使用的类和函数
-  位置: nn_util.py:54 (STN), nn_util.py:82 (svf_exp), nn_util.py:100 (flow_out2)
-        nn_util.py:138 (conv_twice), nn_util.py:148 (LayerNorm), 等
-  问题: 这些类/函数在当前项目中未被任何文件引用, 属于历史遗留代码。增加了代码量
-        和理解负担。
+  8. [低] 问题13 — nn_util.py 中存在未使用的类 nn_util.py
 
-【问题14】（已删除：原分析有误。train.py 中不存在冗余的 model.set_lp_ratio() 调用,
-  lp_ratio 仅在 SACB_Net 构造函数中传入一次）
+  确认。STN, svf_exp, flow_out2, conv_twice, conv_twice_LN, LayerNorm, Up_conv 均未被项目其他文件导入。
 
-【问题15】train.py 每个 epoch 都保存 checkpoint, 没有 "best model" 逻辑
-  位置: train.py:322-328
-  问题: 每个 epoch 结束都保存一个 checkpoint, 靠 max_model_num=20 限制总数。
-        没有跟踪最佳 Dice 并单独保存 best model, 可能导致最优模型被自动删除。
-        save_checkpoint 按修改时间删除最旧的, 但最旧的不一定是最差的。
+  9. [低] 问题10 — tuple_ 重复定义 SACB1.py:22, SACB2.py:27
 
-【问题16】Grad3DiTV 构造函数中无意义赋值
-  位置: losses.py:210
-  代码: a = 1
-  问题: __init__ 中 a = 1 完全无意义, 是调试或占位遗留。
+  确认。
 
-【问题17】process_label 函数使用 open 未 with 管理且用 dict 做变量名
-  位置: utils.py:189-210
-  问题:
-    1) 使用 dict 作为变量名, 遮蔽了 Python 内置类型
-    2) 依赖外部文件 'label_info.txt' 但代码中没有检查文件是否存在
-    3) 该函数在当前项目中未被调用, 属于死代码
+  10. [低] 问题12 — dataset/__init__.py 无意义导入
+
+  确认。只有 import numpy as np，未使用。
+
+  11. [低] 问题17 — process_label 死代码 utils.py:241-263
+
+  确认。未被调用，且用 dict 遮蔽内置类型、open 未用 with。
 
 
 六、做得好的方面
