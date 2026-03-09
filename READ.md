@@ -34,7 +34,7 @@
   cd /root/SACB_Net
   unset OMP_NUM_THREADS
   export OMP_NUM_THREADS=8
-  export CUDA_VISIBLE_DEVICES=0
+  export CUDA_VISIBLE_DEVICES=1
 
   bash scripts/sweep_hparams.sh \
     --dataset ixi \
