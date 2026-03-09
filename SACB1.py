@@ -15,13 +15,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.fft as fft
 from torch.nn.modules.utils import _triple
-from nn_util import get_act_layer, conv
+from nn_util import get_act_layer, conv, tuple_
 from einops import rearrange, reduce
-
-
-def tuple_(x, length=1):
-    """将标量 x 重复为指定长度的元组；若已是元组则直接返回。"""
-    return x if isinstance(x, tuple) else ((x,) * length)
 
 
 class FrequencyPartition(nn.Module):
@@ -132,23 +127,22 @@ class cross_Sim(nn.Module):
         self.win_len = win_s ** 3
 
     def forward(self, Fx, Fy, wins=None):
-        if wins:
-            self.wins = wins
-            self.win_len = wins ** 3
+        cur_wins = wins if wins else self.wins
+        cur_win_len = cur_wins ** 3
         b, c, d, h, w = Fy.shape
 
         # 构建局部窗口内的相对偏移向量 [win^3, 3]
-        vectors = [torch.arange(-s // 2 + 1, s // 2 + 1) for s in [self.wins] * 3]
+        vectors = [torch.arange(-s // 2 + 1, s // 2 + 1) for s in [cur_wins] * 3]
         grid = torch.stack(torch.meshgrid(vectors, indexing='ij'), -1).type(torch.FloatTensor)
-        G = grid.reshape(self.win_len, 3).unsqueeze(0).unsqueeze(0).to(Fx.device)
+        G = grid.reshape(cur_win_len, 3).unsqueeze(0).unsqueeze(0).to(Fx.device)
 
         # 将固定特征展平为查询向量 [B, N, 1, C]
         Fy = rearrange(Fy, 'b c d h w -> b (d h w) 1 c')
-        pd = self.wins // 2
+        pd = cur_wins // 2
 
         # 从运动特征中提取局部补丁 [B, N, win^3, C]
         Fx = F.pad(Fx, tuple_(pd, length=6))
-        Fx = Fx.unfold(2, self.wins, 1).unfold(3, self.wins, 1).unfold(4, self.wins, 1)
+        Fx = Fx.unfold(2, cur_wins, 1).unfold(3, cur_wins, 1).unfold(4, cur_wins, 1)
         Fx = rearrange(Fx, 'b c d h w wd wh ww -> b (d h w) (wd wh ww) c')
 
         # 注意力：query × keys -> softmax -> 加权求和偏移向量
