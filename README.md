@@ -47,12 +47,14 @@
 ## 项目结构
 
 ```
-SACB_Net/
+FFT-SACB/
 ├── model.py            # 多尺度编码器-解码器网络（支持逐尺度 lp_ratio）
 ├── SACB1.py            # SACB 模块 — FFT 频域分区（本项目核心改进）
 ├── SACB2.py            # SACB 模块 — K-Means 聚类（原始基线，用于对比）
 ├── nn_util.py          # 网络组件（STN、卷积块等）
 ├── train.py            # 训练脚本（参数校验、断点续训、种子管理）
+├── infer.py            # 推理脚本（Dice 评估、Jacobian 统计、结果导出）
+├── visualize.py        # 可视化脚本（多视图对比、差异热图、形变网格）
 ├── losses.py           # 损失函数库（NCC、SSIM、MIND-SSC、MI、Grad）
 ├── utils.py            # 空间变换器、Dice 指标、Jacobian 行列式
 ├── dataset/
@@ -147,6 +149,119 @@ python train.py \
 **学习率调度：** 多项式衰减 `lr * (1 - epoch/max_epoch)^0.9`
 
 检查点、TensorBoard 日志和 CSV 指标分别保存在 `experiments/`、`logs/` 和 `csv/` 目录下。
+
+## 推理
+
+使用训练好的 checkpoint 在验证集上评估 Dice 分数和 Jacobian 行列式统计。
+
+```bash
+# 基本用法
+python infer.py --checkpoint experiments/xxx.pth.tar --dataset ixi
+
+# 指定数据目录和 lp_ratio（需与训练时一致）
+python infer.py \
+    --checkpoint experiments/best_model.pth.tar \
+    --dataset lpba \
+    --base-dir /root/autodl-tmp \
+    --lp-ratio 0.15 \
+    --gpu 0
+
+# 保存配准结果（变形图像、位移场、分割标签）为 .npz 文件
+python infer.py \
+    --checkpoint experiments/best_model.pth.tar \
+    --dataset ixi \
+    --save-results \
+    --save-dir results/
+```
+
+### 推理参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--checkpoint` | （必填） | 模型 checkpoint 路径（`.pth.tar`） |
+| `--dataset` | `ixi` | 数据集：`ixi`、`lpba` 或 `abd` |
+| `--base-dir` | `/root/autodl-tmp` | 数据集根目录 |
+| `--lp-ratio` | `0.15` | FFT 低通半径比（需与训练配置一致） |
+| `--gpu` | `0` | GPU 编号 |
+| `--save-results` | off | 启用后保存配准结果为 `.npz` 文件 |
+| `--save-dir` | `results/` | 结果保存目录 |
+
+### 输出指标
+
+- **Dice 分数**：逐对配准的分割标签 Dice 系数（按数据集对应的 ROI 标签计算均值）
+- **%|J|<=0**：Jacobian 行列式中非正值的比例（反映位移场折叠程度，越低越好）
+
+### 保存的 .npz 文件内容
+
+| 键名 | 形状 | 说明 |
+|------|------|------|
+| `moving` | `(D, H, W)` | 运动图像 |
+| `fixed` | `(D, H, W)` | 固定图像 |
+| `warped` | `(D, H, W)` | 配准后的运动图像 |
+| `flow` | `(3, D, H, W)` | 位移场 |
+| `moving_seg` | `(D, H, W)` | 运动图像分割标签 |
+| `fixed_seg` | `(D, H, W)` | 固定图像分割标签 |
+| `warped_seg` | `(D, H, W)` | 配准后的分割标签 |
+
+## 可视化
+
+基于 `infer.py` 保存的 `.npz` 结果文件，生成多视图对比图。
+
+```bash
+# 基本用法（生成所有视图的全部可视化类型）
+python visualize.py --input results/pair_0000.npz
+
+# 指定视图和切片索引
+python visualize.py \
+    --input results/pair_0000.npz \
+    --views axial coronal \
+    --slice_idx 80 \
+    --output_dir vis/
+
+# 调整形变网格线间距
+python visualize.py \
+    --input results/pair_0000.npz \
+    --grid_spacing 8 \
+    --output_dir vis/
+```
+
+### 可视化参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--input` | （必填） | `infer.py` 输出的 `.npz` 文件路径 |
+| `--output_dir` | `vis/` | 可视化图片保存目录 |
+| `--slice_idx` | 中间层 | 切片索引（默认取各轴中间层） |
+| `--views` | `axial sagittal coronal` | 可视化视图，可选 `axial`、`sagittal`、`coronal` |
+| `--grid_spacing` | `4` | 形变网格线间距（像素） |
+
+### 生成的可视化内容
+
+每个视图生成以下四种图：
+
+1. **图像对比图** (`*_comparison.png`)：固定图像 / 运动图像 / 配准后图像 三栏并排
+2. **差异热图** (`*_difference.png`)：|固定图像 - 配准后图像| 的残差热图
+3. **分割对比图** (`*_segmentation.png`)：固定图像分割 vs 配准后分割的彩色标签叠加（需 `.npz` 中包含分割数据）
+4. **形变网格图** (`*_grid.png`)：位移场的形变网格可视化，直观展示局部形变模式
+
+### 推理 + 可视化完整流程
+
+```bash
+# 1. 推理并保存结果
+python infer.py \
+    --checkpoint experiments/best_model.pth.tar \
+    --dataset ixi \
+    --save-results \
+    --save-dir results/
+
+# 2. 对指定配准对生成可视化
+python visualize.py --input results/pair_0000.npz --output_dir vis/
+
+# 3. 批量可视化所有结果
+for f in results/pair_*.npz; do
+    python visualize.py --input "$f" --output_dir vis/
+done
+```
 
 ## 关于多 GPU 训练
 
