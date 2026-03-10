@@ -77,12 +77,14 @@ FFT-SACB/
 ## 环境配置
 
 ```bash
-conda create -n myenv python=3.9
+conda create -n myenv python=3.12
 conda activate myenv
 pip install -r requirements.txt
 ```
 
-**主要依赖：** PyTorch 1.13.1+, MONAI 1.4.0, einops, timm 0.9.2, pystrum
+**运行环境：** Python 3.12 | PyTorch 2.8.0 | CUDA 12.8
+
+**主要依赖：** PyTorch 2.8.0, MONAI 1.4.0+, einops, timm 1.0+, pystrum
 
 ## 数据集
 

@@ -13,7 +13,7 @@ CVPR 2025 论文的官方实现, 用于3D医学图像配准 (Medical Image Regis
 频主导区域 vs 高频主导区域), 每组使用独立的动态卷积核, 从而让网络对不同区域自适应
 地使用不同的卷积参数。
 
-项目技术栈: PyTorch + MONAI + einops + timm, 面向3D脑MRI和腹部CT配准任务。
+项目技术栈: PyTorch 2.8.0 + CUDA 12.8 + MONAI + einops + timm, 面向3D脑MRI和腹部CT配准任务。
 
 论文引用:
   Cheng, Xinxing et al. "SACB-Net: Spatial-awareness Convolutions for Medical
@@ -88,7 +88,7 @@ SACB_Net/
 ================================================================================
 
 1. 环境配置:
-   conda create -n myenv python=3.9
+   conda create -n myenv python=3.12
    conda activate myenv
    pip install -r requirements.txt
 
@@ -98,6 +98,7 @@ SACB_Net/
    export OMP_NUM_THREADS=8
    export CUDA_VISIBLE_DEVICES=0
    python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+   # 预期输出: 2.8.0 True
 
 3. 代码正确性测试 (不依赖数据集):
    # 语法检查
@@ -271,6 +272,6 @@ SACB-Net 是一个研究质量较高的 CVPR 2025 论文代码实现。项目的
 主要改进方向集中在:
 1) 清理历史遗留代码 (SACB2.py 的兼容问题、nn_util.py 的死代码)
 2) 消除硬编码设备依赖 (utils.py SpatialTransformer)
-3) 升级 PyTorch 版本和移除废弃 API (Variable)
+3) 升级至 PyTorch 2.8.0 + Python 3.12 + CUDA 12.8 环境并移除废弃 API (Variable)
 4) 小的代码质量改进 (DRY原则、if-elif-else、best model保存)
 ================================================================================

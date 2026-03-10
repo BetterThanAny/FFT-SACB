@@ -30,8 +30,10 @@
   给你一条“小规模提效扫参”命令（8 组，先粗搜）
   （脚本在 scripts/sweep_hparams.sh:1）
 
+  conda create -n myenv python=3.12
   conda activate myenv
-  cd /root/SACB_Net
+  pip install -r requirements.txt
+  cd /root/FFT-SACB
   unset OMP_NUM_THREADS
   export OMP_NUM_THREADS=8
   export CUDA_VISIBLE_DEVICES=1
