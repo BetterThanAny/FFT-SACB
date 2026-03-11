@@ -13,6 +13,7 @@ SACB-Net 训练脚本。
 import argparse
 import csv
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -132,6 +133,12 @@ def resolve_resume_ckpt(exp_dir, resume_path=''):
     return ckpts[-1]
 
 
+def parse_epoch_from_filename(path):
+    """从 checkpoint 文件名中提取 epoch 数字，如 'dsc0.7229_e8.pth.tar' -> 8。"""
+    m = re.search(r'_e(\d+)\.pth\.tar$', Path(path).name)
+    return int(m.group(1)) if m else None
+
+
 def validate_args(args):
     """校验命令行参数的合法性，不合法时抛出 ValueError 或 FileNotFoundError。"""
     if args.batch_size < 1:
@@ -206,10 +213,7 @@ def main(args):
     cont_training = args.cont_training
 
     # --- 处理恢复训练的起始 epoch ---
-    if cont_training and epoch_start == 0:
-        epoch_start = args.resume_epoch
-    if epoch_start < 0 or epoch_start >= max_epoch:
-        raise ValueError(f'Effective epoch_start must be in [0, {max_epoch - 1}], got {epoch_start}')
+    # epoch 自动从 checkpoint 中提取，见下方 cont_training 分支
 
     # --- 根据数据集类型配置数据路径、变换和评估函数 ---
     if args.dataset == 'ixi':
@@ -293,16 +297,34 @@ def main(args):
     # 最近邻空间变换器，用于验证时对分割标签做变形
     reg_model = utils.SpatialTransformer(size=img_size, mode='nearest').cuda()
 
-    # --- 恢复训练：加载检查点并调整学习率 ---
+    # --- 恢复训练：加载检查点并自动确定起始 epoch ---
     if cont_training:
         model_dir = exp_dir
-        updated_lr = round(lr * np.power(1 - epoch_start / max_epoch, 0.9), 8)
         ckpt_path = resolve_resume_ckpt(model_dir, args.resume_path)
         ckpt = torch.load(str(ckpt_path), map_location='cpu')
         if 'state_dict' not in ckpt:
             raise KeyError(f"Checkpoint missing 'state_dict': {ckpt_path}")
         model.load_state_dict(ckpt['state_dict'])
         print('Model: {} loaded!'.format(ckpt_path.name))
+
+        # 自动从 checkpoint 确定起始 epoch（优先级：用户指定 > checkpoint 内嵌 > 文件名解析 > resume_epoch 兜底）
+        if epoch_start == 0:
+            if 'epoch' in ckpt:
+                epoch_start = ckpt['epoch'] + 1
+            else:
+                parsed = parse_epoch_from_filename(ckpt_path)
+                if parsed is not None:
+                    epoch_start = parsed + 1
+                else:
+                    epoch_start = args.resume_epoch
+                    print(f'[WARN] Cannot detect epoch from checkpoint; '
+                          f'falling back to --resume-epoch={epoch_start}.')
+
+        if epoch_start < 0 or epoch_start >= max_epoch:
+            raise ValueError(f'Effective epoch_start must be in [0, {max_epoch - 1}], got {epoch_start}')
+
+        updated_lr = round(lr * np.power(1 - epoch_start / max_epoch, 0.9), 8)
+        print(f'Resuming from epoch {epoch_start}, lr={updated_lr}')
     else:
         updated_lr = lr
 
@@ -387,6 +409,7 @@ def main(args):
         save_checkpoint(
             {
                 'state_dict': model.state_dict(),
+                'epoch': epoch,
             },
             save_dir=exp_dir,
             filename='dsc{:.4f}_e{}.pth.tar'.format(eval_dsc.avg, epoch),
@@ -395,7 +418,7 @@ def main(args):
         # 保存最佳模型
         if eval_dsc.avg > best_dsc:
             best_dsc = eval_dsc.avg
-            torch.save({'state_dict': model.state_dict()}, str(Path(exp_dir) / 'best_model.pth.tar'))
+            torch.save({'state_dict': model.state_dict(), 'epoch': epoch}, str(Path(exp_dir) / 'best_model.pth.tar'))
             print(f'Best model saved at epoch {epoch} with DSC={best_dsc:.4f}')
 
         writer.add_scalar('DSC/validate', eval_dsc.avg, epoch)

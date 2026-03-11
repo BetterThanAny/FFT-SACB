@@ -109,6 +109,9 @@ def main():
     val_loader = DataLoader(val_set, batch_size=1, shuffle=False,
                             num_workers=4, pin_memory=True)
 
+    if len(val_set) == 0:
+        raise ValueError(f'No validation samples found for dataset={args.dataset} under {val_dir}')
+
     # Initialize model (FFT-SACB: num_k=2, configurable lp_ratio)
     model = SACB_Net(inshape=img_size, lp_ratio=args.lp_ratio)
     model.cuda()

@@ -317,8 +317,10 @@ class NCC_vxm(torch.nn.Module):
         ndims = len(list(Ii.size())) - 2
         assert ndims in [1, 2, 3], "volumes should be 1 to 3 dimensions. found: %d" % ndims
 
-        # 设置滑动窗口大小（默认 9）
+        # 设置滑动窗口大小（默认 9），自动扩展到匹配空间维度数
         win = [9] * ndims if self.win is None else self.win
+        if len(win) == 1:
+            win = win * ndims
 
         # 构建全 1 卷积核，支持任意通道数的分组卷积
         channels = Ii.shape[1]

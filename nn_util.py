@@ -58,7 +58,7 @@ def unfoldNd(input, kernel_size, dilation=1, padding=0, stride=1):
     # get convolution operation
     spatial_dim = input.dim() - 2
     conv = [F.conv1d, F.conv2d, F.conv3d][spatial_dim-1]
-    _tuple = [_pair, _single, _triple]
+    _tuple = [_single, _pair, _triple]
 
     kernel_size =_tuple[spatial_dim-1](kernel_size)
     # prepare one-hot convolution kernel
