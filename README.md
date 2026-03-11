@@ -10,16 +10,15 @@
 |------|------|
 | 非确定性 | 随机初始化导致实验结果不可复现 |
 | 收敛慢 | 迭代聚类计算开销大 |
-| 梯度不可传播 | 聚类分配过程不可微 |
 
-本项目用 **3D FFT 频域分区** 替代 K-Means，实现确定性、可微、高效的空间感知卷积。
+本项目用 **3D FFT 频域分区** 替代 K-Means，实现确定性、高效的空间感知卷积。
 
 ## 核心改进
 
 ### 1. FFT 频域分区（`SACB1.py`）
 
 - **FrequencyPartition 模块**：通过 3D FFT 将特征图变换到频域，以可配置半径（`lp_ratio`）的球形低通掩码将空间位置划分为低频主导区与高频主导区
-- 相比 K-Means（`SACB2.py`）：完全确定性、支持梯度传播、具有频率物理含义
+- 相比 K-Means（`SACB2.py`）：完全确定性、计算效率更高、具有频率物理含义
 - FFT 掩码缓存机制，避免重复计算
 - cuFFT → CPU 自动回退策略，兼顾性能与跨设备兼容性
 - 支持多尺度独立 `lp_ratio`（4 个解码层各自设定频率截止参数）
@@ -51,16 +50,18 @@ FFT-SACB/
 ├── model.py            # 多尺度编码器-解码器网络（支持逐尺度 lp_ratio）
 ├── SACB1.py            # SACB 模块 — FFT 频域分区（本项目核心改进）
 ├── SACB2.py            # SACB 模块 — K-Means 聚类（原始基线，用于对比）
-├── nn_util.py          # 网络组件（STN、卷积块等）
+├── nn_util.py          # 网络工具层（N 维展开、MONAI 卷积封装）
 ├── train.py            # 训练脚本（参数校验、断点续训、种子管理）
 ├── infer.py            # 推理脚本（Dice 评估、Jacobian 统计、结果导出）
 ├── visualize.py        # 可视化脚本（多视图对比、差异热图、形变网格）
 ├── losses.py           # 损失函数库（NCC、SSIM、MIND-SSC、MI、Grad）
 ├── utils.py            # 空间变换器、Dice 指标、Jacobian 行列式
 ├── dataset/
+│   ├── __init__.py     # 包初始化
 │   ├── datasets.py     # 数据集类（IXI、LPBA、AbdomenCTCT）
 │   ├── trans.py        # 数据增强与预处理
-│   └── data_utils.py   # Pickle 加载工具
+│   ├── data_utils.py   # Pickle 加载工具
+│   └── rand.py         # 随机变换工具
 ├── scripts/
 │   ├── run_base.sh     # 标准训练启动
 │   ├── run_smoke.sh    # 烟雾测试
@@ -294,4 +295,4 @@ CUDA_VISIBLE_DEVICES=1 python train.py --gpu 0 ...
 
 ## 致谢
 
-感谢 [SACB-Net](https://github.com/)、[ModeT](https://github.com/ZAX130/SmileCode)、[CANNet](https://github.com/Duanyll/CANConv) 和 [TransMorph](https://github.com/junyuchen245/TransMorph_Transformer_for_Medical_Image_Registration) 项目。
+感谢 [SACB-Net](https://github.com/x-xc/SACB_Net)、[ModeT](https://github.com/ZAX130/SmileCode)、[CANNet](https://github.com/Duanyll/CANConv) 和 [TransMorph](https://github.com/junyuchen245/TransMorph_Transformer_for_Medical_Image_Registration) 项目。

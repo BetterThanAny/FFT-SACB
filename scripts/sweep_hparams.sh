@@ -27,6 +27,11 @@ Options:
   --dry-run                                Print commands only, do not run training
   -h, --help                               Show this help
 
+Note:
+  Default grid = 5 lp_ratios x 3 weights x 2 lrs x 3 seeds = 90 runs.
+  Use --dry-run to preview all commands before launching.
+  Consider narrowing the grid or reducing --max-epoch for initial exploration.
+
 Examples:
   bash scripts/sweep_hparams.sh \
     --dataset ixi \
